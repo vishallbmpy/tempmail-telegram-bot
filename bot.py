@@ -3,7 +3,7 @@ import requests
 import time
 import threading
 
-TOKEN = "BOT TOKEN"
+TOKEN = "8694604276:AAEhBEF8LTvV3kOd-PoKy_2zLhSxaDpuUqA"
 bot = telebot.TeleBot(TOKEN)
 
 user_data = {}
