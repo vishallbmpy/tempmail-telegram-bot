@@ -39,4 +39,4 @@ To become a professional developer and build useful tools.
 
 ## 🚀 Try The Bot
 
-@TempNovaXBot
+https://t.me/TempNovaXBot
