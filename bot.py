@@ -2,53 +2,78 @@ import telebot
 import requests
 import time
 import threading
+import os
 
-TOKEN = "8694604276:AAEhBEF8LTvV3kOd-PoKy_2zLhSxaDpuUqA"
+# ---------------- BOT TOKEN ----------------
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    print("❌ BOT_TOKEN not found")
+    exit()
+
 bot = telebot.TeleBot(TOKEN)
 
+# ---------------- DATA ----------------
 user_data = {}
 auto_running = {}
 
-# ---------- GET EMAIL BODY (IMPORTANT FIX) ----------
+# ---------------- GET FULL MESSAGE ----------------
 def get_mailtm_message(token, msg_id):
-    r = requests.get(
-        f"https://api.mail.tm/messages/{msg_id}",
-        headers={"Authorization": f"Bearer {token}"}
-    )
-    return r.json()
+
+    try:
+        r = requests.get(
+            f"https://api.mail.tm/messages/{msg_id}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+
+        return r.json()
+
+    except Exception as e:
+        print("GET MESSAGE ERROR:", e)
+        return {}
 
 
-# ---------- CHECK INBOX ----------
+# ---------------- CHECK INBOX ----------------
 def check_inbox(chat_id):
-    token = user_data[chat_id]["token"]
 
-    r = requests.get(
-        "https://api.mail.tm/messages",
-        headers={"Authorization": f"Bearer {token}"}
-    ).json()
+    try:
 
-    messages = r.get("hydra:member", [])
+        token = user_data[chat_id]["token"]
 
-    if not messages:
+        r = requests.get(
+            "https://api.mail.tm/messages",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+
+        data = r.json()
+
+        messages = data.get("hydra:member", [])
+
+        if not messages:
+            return None
+
+        msg = messages[0]
+
+        full = get_mailtm_message(token, msg["id"])
+
+        return {
+            "subject": msg.get("subject", "No Subject"),
+            "body": full.get("text", "No Body")
+        }
+
+    except Exception as e:
+        print("CHECK ERROR:", e)
         return None
 
-    msg = messages[0]
 
-    # 🔥 IMPORTANT FIX: FULL MESSAGE BODY GET
-    full = get_mailtm_message(token, msg["id"])
-
-    return {
-        "subject": msg["subject"],
-        "body": full.get("text", "No body found")
-    }
-
-
-# ---------- AUTO LOOP (FIXED STOP SYSTEM) ----------
+# ---------------- AUTO LOOP ----------------
 def auto_loop(chat_id):
 
     auto_running[chat_id] = True
 
-    for i in range(20):
+    last_subject = ""
+
+    for i in range(60):
 
         if not auto_running.get(chat_id):
             bot.send_message(chat_id, "🛑 Auto stopped")
@@ -58,60 +83,119 @@ def auto_loop(chat_id):
 
         if result:
 
-            # 🔥 SMART OTP FILTER
-            text = result["subject"] + " " + result["body"]
+            subject = result["subject"]
+            body = result["body"]
 
-            if any(x in text.lower() for x in ["otp", "code", "verification"]):
+            # duplicate avoid
+            if subject == last_subject:
+                time.sleep(5)
+                continue
+
+            last_subject = subject
+
+            text = (subject + " " + body).lower()
+
+            if any(x in text for x in ["otp", "code", "verification", "login"]):
 
                 bot.send_message(
                     chat_id,
-                    f"📩 OTP FOUND:\n\n"
-                    f"Subject: {result['subject']}\n\n"
-                    f"Body: {result['body'][:300]}"
+                    f"📩 OTP FOUND\n\n"
+                    f"📌 Subject:\n{subject}\n\n"
+                    f"📨 Message:\n{body[:500]}"
                 )
-                return
 
-        bot.send_message(chat_id, "🔄 checking...")
+            else:
+
+                bot.send_message(
+                    chat_id,
+                    f"📬 New Email\n\n"
+                    f"📌 Subject:\n{subject}"
+                )
+
         time.sleep(5)
 
-    bot.send_message(chat_id, "❌ OTP not received")
+    bot.send_message(chat_id, "⌛ Auto check finished")
 
 
-# ---------- START ----------
+# ---------------- START ----------------
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.send_message(m.chat.id,
-        "🤖 Temp Mail Bot\n\n/new → email\n/check → OTP\n/auto → start\n/stop → stop auto"
+
+    bot.send_message(
+        m.chat.id,
+        "🔥 Temp Mail Bot\n\n"
+        "/new → New Temp Email\n"
+        "/check → Check Inbox\n"
+        "/auto → Auto OTP Check\n"
+        "/stop → Stop Auto"
     )
 
 
-# ---------- NEW EMAIL ----------
+# ---------------- NEW EMAIL ----------------
 @bot.message_handler(commands=['new'])
 def new(m):
-    domain = requests.get("https://api.mail.tm/domains").json()["hydra:member"][0]["domain"]
 
-    email = f"user{int(time.time())}@{domain}"
-    password = "Test@12345"
+    try:
 
-    requests.post("https://api.mail.tm/accounts", json={
-        "address": email,
-        "password": password
-    })
+        bot.send_message(m.chat.id, "⏳ Creating Temp Email...")
 
-    token = requests.post("https://api.mail.tm/token", json={
-        "address": email,
-        "password": password
-    }).json()["token"]
+        domains = requests.get(
+            "https://api.mail.tm/domains"
+        ).json()
 
-    user_data[m.chat.id] = {
-        "email": email,
-        "token": token
-    }
+        domain = domains["hydra:member"][0]["domain"]
 
-    bot.send_message(m.chat.id, f"📧 Email:\n\n{email}")
+        email = f"user{int(time.time())}@{domain}"
+        password = "Test@12345"
+
+        # create account
+        requests.post(
+            "https://api.mail.tm/accounts",
+            json={
+                "address": email,
+                "password": password
+            }
+        )
+
+        # get token
+        token_res = requests.post(
+            "https://api.mail.tm/token",
+            json={
+                "address": email,
+                "password": password
+            }
+        )
+
+        token_data = token_res.json()
+
+        token = token_data.get("token")
+
+        if not token:
+            bot.send_message(m.chat.id, "❌ Failed To Generate Token")
+            return
+
+        user_data[m.chat.id] = {
+            "email": email,
+            "token": token
+        }
+
+        bot.send_message(
+            m.chat.id,
+            f"📧 Your Temp Email:\n\n{email}\n\n"
+            f"📥 Ready To Receive OTPs..."
+        )
+
+    except Exception as e:
+
+        print("NEW EMAIL ERROR:", e)
+
+        bot.send_message(
+            m.chat.id,
+            f"❌ Error Creating Email\n\n{e}"
+        )
 
 
-# ---------- CHECK ----------
+# ---------------- CHECK ----------------
 @bot.message_handler(commands=['check'])
 def check(m):
 
@@ -122,16 +206,18 @@ def check(m):
     result = check_inbox(m.chat.id)
 
     if not result:
-        bot.send_message(m.chat.id, "📭 No OTP yet")
+        bot.send_message(m.chat.id, "📭 No Email Yet")
         return
 
     bot.send_message(
         m.chat.id,
-        f"📩 OTP:\n\n{result['subject']}\n\n{result['body'][:300]}"
+        f"📩 EMAIL RECEIVED\n\n"
+        f"📌 Subject:\n{result['subject']}\n\n"
+        f"📨 Message:\n{result['body'][:500]}"
     )
 
 
-# ---------- AUTO START ----------
+# ---------------- AUTO ----------------
 @bot.message_handler(commands=['auto'])
 def auto(m):
 
@@ -140,19 +226,27 @@ def auto(m):
         return
 
     if auto_running.get(m.chat.id):
-        bot.send_message(m.chat.id, "⚠️ Already running")
+        bot.send_message(m.chat.id, "⚠️ Auto already running")
         return
 
-    bot.send_message(m.chat.id, "🔄 Auto started")
+    bot.send_message(m.chat.id, "🔄 Auto OTP Checker Started")
 
-    threading.Thread(target=auto_loop, args=(m.chat.id,)).start()
+    threading.Thread(
+        target=auto_loop,
+        args=(m.chat.id,)
+    ).start()
 
 
-# ---------- STOP ----------
+# ---------------- STOP ----------------
 @bot.message_handler(commands=['stop'])
 def stop(m):
+
     auto_running[m.chat.id] = False
-    bot.send_message(m.chat.id, "🛑 Stopping auto...")
+
+    bot.send_message(m.chat.id, "🛑 Stopping...")
 
 
-bot.polling()
+# ---------------- RUN ----------------
+print("✅ BOT RUNNING...")
+
+bot.infinity_polling()
