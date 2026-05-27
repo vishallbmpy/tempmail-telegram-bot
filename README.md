@@ -36,3 +36,7 @@ Temporary Email + OTP Receiver Bot
 ## 🚀 Goal
 
 To become a professional developer and build useful tools.
+
+## 🚀 Try The Bot
+
+@TempNovaXBot
